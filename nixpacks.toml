@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["glib", "nss", "nspr", "atk", "cups", "dbus", "libdrm", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXrandr", "xorg.libxcb", "xorg.libX11", "mesa", "expat", "libxkbcommon", "gtk3", "pango", "cairo", "alsa-lib"]
+nixPkgs = ["dejavu_fonts", "liberation_ttf"]
 
 [start]
 cmd = "python bot.py"
