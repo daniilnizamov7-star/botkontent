@@ -4,6 +4,8 @@ import aiohttp
 import re
 import datetime
 import tempfile
+import subprocess
+import sys
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.types import Message, BufferedInputFile
@@ -11,7 +13,7 @@ from aiogram.filters import Command
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
-
+subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
 load_dotenv()
 
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
