@@ -3,237 +3,32 @@ import asyncio
 import aiohttp
 import re
 import datetime
-import tempfile
-import subprocess
-import sys
+import textwrap
+import io
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.types import Message, BufferedInputFile
 from aiogram.filters import Command
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from playwright.async_api import async_playwright
-subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+from PIL import Image, ImageDraw, ImageFont
+
 load_dotenv()
 
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher()
 router = Router()
 
-# ─── HTML шаблон для картинки ────────────────────────────────────────────────
-
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<link href="https://fonts.googleapis.com/css2?family=Russo+One&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-<style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-
-  body {{
-    width: 1080px;
-    height: 1920px;
-    background: #0a0a0f;
-    font-family: 'Inter', sans-serif;
-    color: white;
-    overflow: hidden;
-    position: relative;
-  }}
-
-  /* Фоновые элементы */
-  .bg-grid {{
-    position: absolute;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(0,255,180,0.04) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,255,180,0.04) 1px, transparent 1px);
-    background-size: 60px 60px;
-  }}
-
-  .bg-glow {{
-    position: absolute;
-    width: 900px;
-    height: 900px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(0,200,150,0.12) 0%, transparent 70%);
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-  }}
-
-  .bg-accent {{
-    position: absolute;
-    width: 400px;
-    height: 400px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(80,120,255,0.15) 0%, transparent 70%);
-    top: 100px;
-    right: -100px;
-  }}
-
-  /* Верхняя полоса */
-  .top-bar {{
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 6px;
-    background: linear-gradient(90deg, #00c896, #5078ff, #00c896);
-    background-size: 200% 100%;
-  }}
-
-  /* Тип поста */
-  .post-type {{
-    position: absolute;
-    top: 80px;
-    left: 80px;
-    font-size: 28px;
-    font-weight: 600;
-    color: #00c896;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    opacity: 0.9;
-  }}
-
-  .post-type::before {{
-    content: '';
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    background: #00c896;
-    border-radius: 50%;
-    margin-right: 14px;
-    vertical-align: middle;
-    box-shadow: 0 0 12px #00c896;
-  }}
-
-  /* Разделитель */
-  .divider {{
-    position: absolute;
-    top: 160px;
-    left: 80px;
-    right: 80px;
-    height: 1px;
-    background: linear-gradient(90deg, #00c896, transparent);
-    opacity: 0.3;
-  }}
-
-  /* Центральная область */
-  .content {{
-    position: absolute;
-    top: 50%;
-    left: 80px;
-    right: 80px;
-    transform: translateY(-50%);
-    text-align: center;
-  }}
-
-  .icon {{
-    font-size: 100px;
-    margin-bottom: 60px;
-    filter: drop-shadow(0 0 20px rgba(0,200,150,0.5));
-  }}
-
-  .title {{
-    font-family: 'Russo One', sans-serif;
-    font-size: {font_size}px;
-    line-height: 1.2;
-    letter-spacing: -1px;
-    background: linear-gradient(135deg, #ffffff 0%, #00c896 50%, #5078ff 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin-bottom: 50px;
-    text-shadow: none;
-    padding: 0 20px;
-  }}
-
-  .subtitle {{
-    font-size: 34px;
-    color: rgba(255,255,255,0.45);
-    font-weight: 400;
-    letter-spacing: 1px;
-  }}
-
-  /* Нижняя часть */
-  .bottom {{
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding: 60px 80px;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-  }}
-
-  .channel {{
-    font-size: 36px;
-    font-weight: 600;
-    color: #00c896;
-    letter-spacing: 1px;
-  }}
-
-  .channel span {{
-    color: rgba(255,255,255,0.3);
-    font-weight: 400;
-  }}
-
-  .day-badge {{
-    background: rgba(0,200,150,0.1);
-    border: 1px solid rgba(0,200,150,0.3);
-    border-radius: 50px;
-    padding: 16px 36px;
-    font-size: 30px;
-    font-weight: 600;
-    color: rgba(255,255,255,0.6);
-    letter-spacing: 2px;
-  }}
-
-  /* Боковые декоры */
-  .side-line {{
-    position: absolute;
-    left: 40px;
-    top: 200px;
-    bottom: 200px;
-    width: 2px;
-    background: linear-gradient(180deg, transparent, rgba(0,200,150,0.3), transparent);
-  }}
-</style>
-</head>
-<body>
-  <div class="bg-grid"></div>
-  <div class="bg-glow"></div>
-  <div class="bg-accent"></div>
-  <div class="top-bar"></div>
-  <div class="side-line"></div>
-
-  <div class="post-type">{post_type}</div>
-  <div class="divider"></div>
-
-  <div class="content">
-    <div class="icon">{icon}</div>
-    <div class="title">{title}</div>
-    <div class="subtitle">{subtitle}</div>
-  </div>
-
-  <div class="bottom">
-    <div class="channel"><span>канал</span> @Daniil_dev74</div>
-    <div class="day-badge">{day_name}</div>
-  </div>
-</body>
-</html>"""
-
 # ─── Данные по дням ───────────────────────────────────────────────────────────
 
 DAY_META = {
-    0: {"type": "КЕЙС",      "icon": "💼", "subtitle": "Реальный опыт",    "day": "ПН"},
-    1: {"type": "ЛАЙФХАК",   "icon": "⚡", "subtitle": "Экономь время",    "day": "ВТ"},
-    2: {"type": "ВОПРОС",    "icon": "🤔", "subtitle": "Твоё мнение",      "day": "СР"},
-    3: {"type": "ОФФЕР",     "icon": "🚀", "subtitle": "Работаем вместе",  "day": "ЧТ"},
-    4: {"type": "УРОК",      "icon": "📚", "subtitle": "Учимся вместе",    "day": "ПТ"},
-    5: {"type": "МЕМ",       "icon": "😄", "subtitle": "Узнаёшь себя?",   "day": "СБ"},
-    6: {"type": "МОТИВАЦИЯ", "icon": "🔥", "subtitle": "Не сдавайся",      "day": "ВС"},
+    0: {"type": "КЕЙС",      "icon": ">>",  "subtitle": "Реальный опыт",   "day": "ПН"},
+    1: {"type": "ЛАЙФХАК",   "icon": "//",  "subtitle": "Экономь время",   "day": "ВТ"},
+    2: {"type": "ВОПРОС",    "icon": "??",  "subtitle": "Твоё мнение",     "day": "СР"},
+    3: {"type": "ОФФЕР",     "icon": "**",  "subtitle": "Работаем вместе", "day": "ЧТ"},
+    4: {"type": "УРОК",      "icon": "{}",  "subtitle": "Учимся вместе",   "day": "ПТ"},
+    5: {"type": "МЕМ",       "icon": ":)",  "subtitle": "Узнаёшь себя?",  "day": "СБ"},
+    6: {"type": "МОТИВАЦИЯ", "icon": "^^",  "subtitle": "Не сдавайся",     "day": "ВС"},
 }
 
 PUBLICATION_PLAN = {
@@ -246,7 +41,7 @@ PUBLICATION_PLAN = {
     6: "Напиши мотивационный пост для Telegram канала Python разработчика-фрилансера. Тема: почему стоит развиваться в IT даже когда тяжело. Добавь личный штрих от первого лица. Добавь эмодзи. Не пиши контакты и ссылки. Объём: 80-120 слов."
 }
 
-# ─── Вспомогательные функции ──────────────────────────────────────────────────
+# ─── Вспомогательные функции ─────────────────────────────────────────────────
 
 def clean_markdown(text):
     text = re.sub(r"[*]{1,}", "", text)
@@ -256,21 +51,7 @@ def clean_markdown(text):
     return text.strip()
 
 
-def get_font_size(text: str) -> int:
-    """Подбирает размер шрифта по длине заголовка."""
-    length = len(text)
-    if length <= 30:
-        return 110
-    elif length <= 60:
-        return 85
-    elif length <= 90:
-        return 68
-    else:
-        return 54
-
-
 async def generate_text_with_yandex_gpt(prompt: str) -> str:
-    """Генерирует текст через Yandex GPT API."""
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
     headers = {
         "Authorization": f"Api-Key {os.getenv('YANDEX_GPT_API_KEY')}",
@@ -306,7 +87,6 @@ async def generate_text_with_yandex_gpt(prompt: str) -> str:
 
 
 async def generate_title_for_image(post_text: str, day_type: str) -> str:
-    """Генерирует короткий заголовок для картинки на основе поста."""
     prompt = (
         f"На основе этого поста придумай ОДИН короткий заголовок для картинки-анонса. "
         f"Тип поста: {day_type}. "
@@ -314,50 +94,122 @@ async def generate_title_for_image(post_text: str, day_type: str) -> str:
         f"Верни ТОЛЬКО заголовок, ничего лишнего.\n\nПост:\n{post_text[:500]}"
     )
     title = await generate_text_with_yandex_gpt(prompt)
-    # Чистим на случай если GPT добавил лишнее
     title = title.strip().strip('"').strip("'").strip()
-    # Берём только первую строку
     title = title.split('\n')[0].strip()
     return title
 
 
-async def generate_story_image(title: str, day_index: int) -> bytes:
-    """Генерирует PNG картинку 1080x1920 через Playwright."""
+def get_font(size: int):
+    """Загружает системный шрифт с поддержкой кириллицы."""
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+    ]
+    for path in font_paths:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def generate_story_image_pillow(title: str, day_index: int) -> bytes:
+    """Генерирует картинку 1080x1920 через Pillow."""
+    W, H = 1080, 1920
     meta = DAY_META[day_index]
-    font_size = get_font_size(title)
 
-    html = HTML_TEMPLATE.format(
-        post_type=meta["type"],
-        icon=meta["icon"],
-        title=title,
-        subtitle=meta["subtitle"],
-        day_name=meta["day"],
-        font_size=font_size,
-    )
+    # Цвета
+    BG       = (10, 10, 20)
+    GREEN    = (0, 200, 140)
+    GREEN_DK = (0, 120, 85)
+    WHITE    = (255, 255, 255)
+    GRAY     = (130, 130, 150)
+    LINE_CLR = (25, 35, 45)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page(viewport={"width": 1080, "height": 1920})
-        await page.set_content(html, wait_until="networkidle")
-        # Ждём загрузки Google Fonts
-        await asyncio.sleep(1)
-        screenshot = await page.screenshot(type="png")
-        await browser.close()
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
 
-    return screenshot
+    # ── Фоновая сетка ──
+    for x in range(0, W, 60):
+        draw.line([(x, 0), (x, H)], fill=(20, 30, 25), width=1)
+    for y in range(0, H, 60):
+        draw.line([(0, y), (W, y)], fill=(20, 30, 25), width=1)
+
+    # ── Верхняя полоса ──
+    draw.rectangle([(0, 0), (W, 8)], fill=GREEN)
+
+    # ── Левая боковая линия ──
+    draw.rectangle([(36, 200), (42, H - 200)], fill=GREEN_DK)
+
+    # ── Тип поста ──
+    font_type = get_font(56)
+    draw.text((85, 75), f"[ {meta['type']} ]", font=font_type, fill=GREEN)
+
+    # ── Разделитель под типом ──
+    draw.line([(85, 178), (W - 85, 178)], fill=LINE_CLR, width=2)
+
+    # ── Символьная иконка по центру (ASCII-арт вместо эмодзи) ──
+    font_icon = get_font(180)
+    draw.text((W // 2, H // 2 - 340), meta["icon"],
+              font=font_icon, fill=GREEN, anchor="mm")
+
+    # ── Заголовок с переносом строк ──
+    if len(title) <= 20:
+        f = get_font(100)
+        wrap_w = 12
+    elif len(title) <= 40:
+        f = get_font(82)
+        wrap_w = 16
+    elif len(title) <= 60:
+        f = get_font(68)
+        wrap_w = 20
+    else:
+        f = get_font(56)
+        wrap_w = 24
+
+    lines = textwrap.wrap(title, width=wrap_w)
+    line_h = f.size + 24
+    total_h = len(lines) * line_h
+    y_start = H // 2 - total_h // 2 + 60
+
+    for i, line in enumerate(lines):
+        draw.text((W // 2, y_start + i * line_h), line,
+                  font=f, fill=WHITE, anchor="mm")
+
+    # ── Подзаголовок ──
+    font_sub = get_font(42)
+    draw.text((W // 2, y_start + total_h + 55), meta["subtitle"],
+              font=font_sub, fill=GRAY, anchor="mm")
+
+    # ── Нижняя линия ──
+    draw.line([(85, H - 170), (W - 85, H - 170)], fill=LINE_CLR, width=2)
+
+    # ── Канал слева, день справа ──
+    font_bot = get_font(46)
+    draw.text((85, H - 130), "@Daniil_dev74", font=font_bot, fill=GREEN)
+    draw.text((W - 85, H - 130), meta["day"], font=font_bot, fill=GRAY, anchor="ra")
+
+    # Сохраняем в байты
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf.read()
 
 
-# ─── Основная функция публикации ──────────────────────────────────────────────
+# ─── Основная функция публикации ─────────────────────────────────────────────
 
 async def publish_daily_post():
-    """Генерирует картинку + текст и публикует в канал."""
     day_index = datetime.datetime.now().weekday()
     prompt = PUBLICATION_PLAN[day_index]
     meta = DAY_META[day_index]
 
     print(f"[{datetime.datetime.now()}] Начинаю генерацию поста ({meta['type']})...")
 
-    # 1. Генерируем текст поста
+    # 1. Генерируем текст
     content = await generate_text_with_yandex_gpt(prompt)
     content = clean_markdown(content)
     content = re.sub(r"(?i)(ваш контакт|контакт|связаться со мной|напишите мне)[:\s]*", "", content)
@@ -371,18 +223,18 @@ async def publish_daily_post():
 
     # 3. Генерируем картинку
     try:
-        image_bytes = await generate_story_image(title, day_index)
-        print("Картинка сгенерирована успешно")
+        image_bytes = await asyncio.get_event_loop().run_in_executor(
+            None, generate_story_image_pillow, title, day_index
+        )
+        print("Картинка сгенерирована ✅")
     except Exception as e:
         print(f"Ошибка генерации картинки: {e}")
         image_bytes = None
 
-    # 4. Публикуем в канал
+    # 4. Публикуем
     try:
         channel_id = os.getenv("CHANNEL_ID")
-
         if image_bytes:
-            # Отправляем картинку с текстом как подпись
             photo = BufferedInputFile(image_bytes, filename="post.png")
             await bot.send_photo(
                 chat_id=channel_id,
@@ -390,11 +242,8 @@ async def publish_daily_post():
                 caption=content
             )
         else:
-            # Если картинка не сгенерировалась — отправляем только текст
             await bot.send_message(chat_id=channel_id, text=content)
-
         print(f"Пост опубликован: {datetime.datetime.now().strftime('%A %H:%M')}")
-
     except Exception as e:
         print(f"Ошибка при публикации: {e}")
 
@@ -422,11 +271,9 @@ async def test_post(message: Message):
 
 async def main():
     dp.include_router(router)
-
     scheduler = AsyncIOScheduler()
     scheduler.add_job(publish_daily_post, 'cron', hour=4, minute=0, timezone='UTC')
     scheduler.start()
-
     print("Бот запущен. Ожидаю команды...")
     await dp.start_polling(bot)
 
