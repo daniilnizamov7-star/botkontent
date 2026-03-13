@@ -235,12 +235,18 @@ async def publish_daily_post():
     try:
         channel_id = os.getenv("CHANNEL_ID")
         if image_bytes:
-            photo = BufferedInputFile(image_bytes, filename="post.png")
-            await bot.send_photo(
-                chat_id=channel_id,
-                photo=photo,
-                caption=content
-            )
+    photo = BufferedInputFile(image_bytes, filename="post.png")
+    # Telegram caption максимум 1024 символа
+    if len(content) > 1024:
+        # Отправляем картинку отдельно, текст отдельно
+        await bot.send_photo(chat_id=channel_id, photo=photo)
+        await bot.send_message(chat_id=channel_id, text=content)
+    else:
+        await bot.send_photo(
+            chat_id=channel_id,
+            photo=photo,
+            caption=content
+        )
         else:
             await bot.send_message(chat_id=channel_id, text=content)
         print(f"Пост опубликован: {datetime.datetime.now().strftime('%A %H:%M')}")
