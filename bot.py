@@ -16,14 +16,23 @@ bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher()
 router = Router()
 
+# дата начала канала (для счетчика дней)
+START_DATE = datetime.datetime(2026, 3, 5)
+
 PUBLICATION_PLAN = {
-    0: "Напиши пост-кейс для Telegram канала Python разработчика-фрилансера. Тема: выполненный заказ на парсинг сайта. Стиль: просто, по-человечески, без воды, как будто рассказываешь другу. Добавь эмодзи. Не пиши контакты и ссылки. Объём: 150-200 слов.",
-    1: "Напиши лайфхак по Python для Telegram канала разработчика. Один конкретный трюк который экономит время. Пример кода 3-5 строк. Объясни зачем это нужно. Стиль: просто и понятно. Добавь эмодзи. Не пиши контакты и ссылки. Объём: 80-100 слов.",
-    2: "Напиши вовлекающий вопрос для Telegram канала о Python разработке. Вопрос должен заставить подписчиков ответить в комментариях. Добавь эмодзи и варианты ответа. Не пиши контакты и ссылки. Объём: 30-50 слов.",
-    3: "Напиши продающий пост для Telegram канала Python фрилансера из Челябинска. Услуги: парсинг сайтов, Telegram боты, автоматизация на Python. Цены от 2000 рублей. Стиль: ненавязчиво, с пользой для читателя. Добавь эмодзи. Не пиши контакты и ссылки. Объём: 100-150 слов.",
-    4: "Напиши мини-урок по Python для Telegram канала. Тема: что-то полезное из Selenium, requests, pandas или aiogram. Покажи только часть кода — намекни что в реальных проектах есть много нюансов и подводных камней которые знает только опытный разработчик. Стиль: как объясняешь другу. Добавь эмодзи. Не пиши контакты и ссылки. Объём: 120-160 слов.",
-    5: "Напиши смешной пост про жизнь программиста для Telegram канала. Тема: баги, заказчики, дедлайны или код в 2 ночи. Стиль: юмор, узнаваемая ситуация. Добавь эмодзи. Не пиши контакты и ссылки. Объём: 50-80 слов.",
-    6: "Напиши мотивационный пост для Telegram канала Python разработчика-фрилансера. Тема: почему стоит развиваться в IT даже когда тяжело. Добавь личный штрих от первого лица. Добавь эмодзи. Не пиши контакты и ссылки. Объём: 80-120 слов."
+    0: "Напиши пост для Telegram канала 'Даниил с завода'. Сегодня автор после смены на заводе писал Python-скрипт для парсинга сайта. Расскажи как он разбирался и что получилось. Стиль личного дневника. 120-160 слов.",
+
+    1: "Напиши пост для Telegram канала 'Даниил с завода'. Сегодня автор изучил маленький лайфхак по Python который экономит время. Добавь короткий пример кода 3-5 строк и объясни как новичок.",
+
+    2: "Напиши пост-вопрос для подписчиков. Автор учится Python и спрашивает совет у аудитории. Например какой инструмент изучать дальше или как люди учили программирование.",
+
+    3: "Напиши пост о том как Python помогает автоматизировать работу. Представь что автор только сегодня это понял и делится открытием.",
+
+    4: "Напиши мини-урок по Python который автор сегодня изучал. Например Selenium, requests или aiogram. Объясни как новичок который только разобрался.",
+
+    5: "Напиши лёгкий пост про жизнь человека который учит программирование после работы на заводе. Можно немного юмора.",
+
+    6: "Напиши мотивационный пост о том как трудно учиться после работы, но автор продолжает идти к цели — уйти с завода и работать в IT."
 }
 
 
@@ -36,22 +45,45 @@ def clean_markdown(text):
 
 
 async def generate_text_with_yandex_gpt(prompt: str) -> str:
+
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+
     headers = {
         "Authorization": f"Api-Key {os.getenv('YANDEX_GPT_API_KEY')}",
         "Content-Type": "application/json"
     }
+
     data = {
         "modelUri": f"gpt://{os.getenv('FOLDER_ID')}/yandexgpt/latest",
         "completionOptions": {
             "stream": False,
-            "temperature": 0.7,
+            "temperature": 0.6,
             "maxTokens": 1000
         },
         "messages": [
             {
                 "role": "system",
-                "text": "Ты — помощник для создания контента в Telegram‑канале о программировании на Python. Пиши кратко, понятно и с примерами кода, где это уместно."
+                "text": """
+Ты пишешь посты для Telegram канала "Даниил с завода".
+
+Контекст:
+Автор — обычный человек, который работает на заводе по производству алюминиевых банок.
+После смены он изучает Python, AI и автоматизацию чтобы уйти с завода.
+
+Стиль:
+Пиши как личный блог.
+Просто, по-человечески.
+Не как учебник и не как статья.
+
+Иногда упоминай:
+— что автор учится после работы
+— что что-то получается не сразу
+— что он только разбирается в программировании
+
+Пост должен читаться как история дня или опыт обучения.
+
+Используй лёгкий разговорный стиль и иногда эмодзи.
+"""
             },
             {
                 "role": "user",
@@ -59,11 +91,14 @@ async def generate_text_with_yandex_gpt(prompt: str) -> str:
             }
         ]
     }
+
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=data) as response:
+
             if response.status == 200:
                 result = await response.json()
                 return result["result"]["alternatives"][0]["message"]["text"]
+
             else:
                 error_text = await response.text()
                 print(f"Ошибка API Yandex GPT: {response.status} — {error_text}")
@@ -71,47 +106,81 @@ async def generate_text_with_yandex_gpt(prompt: str) -> str:
 
 
 async def publish_daily_post():
+
     day_index = datetime.datetime.now().weekday()
     prompt = PUBLICATION_PLAN[day_index]
 
     print(f"[{datetime.datetime.now()}] Генерирую пост...")
 
     content = await generate_text_with_yandex_gpt(prompt)
+
     content = clean_markdown(content)
+
+    # удаляем лишние контакты если модель вдруг добавит
     content = re.sub(r"(?i)(ваш контакт|контакт|связаться со мной|напишите мне)[:\s]*", "", content)
     content = re.sub(r"@\w+", "", content)
+
+    # считаем номер дня
+    day_number = (datetime.datetime.now() - START_DATE).days + 1
+
+    content = f"День {day_number}. Путь из завода в IT\n\n" + content
+
     content = content.strip()
     content += "\n\n📩 @Aslyamov74"
 
     try:
+
         await bot.send_message(
             chat_id=os.getenv("CHANNEL_ID"),
             text=content
         )
+
         print(f"Пост опубликован: {datetime.datetime.now().strftime('%A %H:%M')}")
+
     except Exception as e:
+
         print(f"Ошибка при публикации: {e}")
 
 
 @router.message(Command("start"))
 @router.message(Command("help"))
 async def send_welcome(message: Message):
-    await message.answer("Бот запущен! ✅\nКаждый день в 9:00 по Челябинску публикуется новый пост.\n\n/test_post — опубликовать прямо сейчас")
+
+    await message.answer(
+        "Бот запущен! ✅\n"
+        "Каждый день в 9:00 по Челябинску публикуется новый пост.\n\n"
+        "/test_post — опубликовать пост прямо сейчас"
+    )
 
 
 @router.message(Command("test_post"))
 async def test_post(message: Message):
+
     await message.answer("Генерирую пост... ⏳")
+
     await publish_daily_post()
-    await message.answer("Готово! ✅")
+
+    await message.answer("Пост опубликован! ✅")
 
 
 async def main():
+
     dp.include_router(router)
+
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(publish_daily_post, 'cron', hour=4, minute=0, timezone='UTC')
+
+    scheduler.add_job(
+        publish_daily_post,
+        'cron',
+        hour=4,
+        minute=0,
+        timezone='UTC'
+    )
+
     scheduler.start()
+
     print("Бот запущен. Ожидаю команды...")
+
     await dp.start_polling(bot)
 
 
