@@ -2,4 +2,3 @@ aiogram
 apscheduler
 python-dotenv
 aiohttp
-Pillow
