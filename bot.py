@@ -114,7 +114,7 @@ async def main():
 
     # Запускаем планировщик (ежедневно в 9:00)
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(publish_daily_post, 'cron', hour=9, minute=0)
+    scheduler.add_job(publish_daily_post, 'cron', hour=4, minute=0, timezone='UTC')  # 9:00 Челябинск (UTC+5)
     scheduler.start()
 
     # Запускаем бота
