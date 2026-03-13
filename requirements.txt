@@ -1,4 +1,5 @@
-aiogram==3.13.0
-apscheduler==3.11.2
-python-dotenv==1.2.2
-playwright==1.44.0
+aiogram
+apscheduler
+python-dotenv
+playwright
+aiohttp
