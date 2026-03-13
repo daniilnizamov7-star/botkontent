@@ -16,21 +16,26 @@ bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher()
 router = Router()
 
-# дата начала канала (для счетчика дней)
+# Дата начала канала
 START_DATE = datetime.datetime(2026, 3, 5)
 
+# График работы: 4 дня работа / 4 дня отдых
+WORK_CYCLE = 8
+WORK_DAYS = 4
+
+
 PUBLICATION_PLAN = {
-    0: "Напиши пост для Telegram канала 'Даниил с завода'. Сегодня автор после смены на заводе писал Python-скрипт для парсинга сайта. Расскажи как он разбирался и что получилось. Стиль личного дневника. 120-160 слов.",
+    0: "Напиши пост для Telegram канала 'Даниил с завода'. Автор сегодня писал Python-скрипт для парсинга сайта. Расскажи как он разбирался и что получилось. Стиль личного дневника. 120-160 слов.",
 
-    1: "Напиши пост для Telegram канала 'Даниил с завода'. Сегодня автор изучил маленький лайфхак по Python который экономит время. Добавь короткий пример кода 3-5 строк и объясни как новичок.",
+    1: "Напиши пост для Telegram канала 'Даниил с завода'. Сегодня автор изучил небольшой лайфхак по Python который экономит время. Добавь короткий пример кода 3-5 строк.",
 
-    2: "Напиши пост-вопрос для подписчиков. Автор учится Python и спрашивает совет у аудитории. Например какой инструмент изучать дальше или как люди учили программирование.",
+    2: "Напиши пост-вопрос для подписчиков. Автор учится Python и спрашивает совет у аудитории: какой инструмент изучать дальше или как люди учили программирование.",
 
     3: "Напиши пост о том как Python помогает автоматизировать работу. Представь что автор только сегодня это понял и делится открытием.",
 
     4: "Напиши мини-урок по Python который автор сегодня изучал. Например Selenium, requests или aiogram. Объясни как новичок который только разобрался.",
 
-    5: "Напиши лёгкий пост про жизнь человека который учит программирование после работы на заводе. Можно немного юмора.",
+    5: "Напиши лёгкий пост про жизнь человека который учит программирование после работы на заводе. Можно добавить немного юмора.",
 
     6: "Напиши мотивационный пост о том как трудно учиться после работы, но автор продолжает идти к цели — уйти с завода и работать в IT."
 }
@@ -44,7 +49,14 @@ def clean_markdown(text):
     return text.strip()
 
 
-async def generate_text_with_yandex_gpt(prompt: str) -> str:
+def is_work_day():
+    today = datetime.datetime.now()
+    days_passed = (today - START_DATE).days
+    cycle_day = days_passed % WORK_CYCLE
+    return cycle_day < WORK_DAYS
+
+
+async def generate_text_with_yandex_gpt(prompt: str):
 
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
@@ -67,22 +79,21 @@ async def generate_text_with_yandex_gpt(prompt: str) -> str:
 Ты пишешь посты для Telegram канала "Даниил с завода".
 
 Контекст:
-Автор — обычный человек, который работает на заводе по производству алюминиевых банок.
+Автор канала — обычный человек который работает на заводе по производству алюминиевых банок.
 После смены он изучает Python, AI и автоматизацию чтобы уйти с завода.
 
 Стиль:
 Пиши как личный блог.
-Просто, по-человечески.
+Просто и по-человечески.
 Не как учебник и не как статья.
 
 Иногда упоминай:
 — что автор учится после работы
-— что что-то получается не сразу
+— что не всё получается сразу
 — что он только разбирается в программировании
 
-Пост должен читаться как история дня или опыт обучения.
-
-Используй лёгкий разговорный стиль и иногда эмодзи.
+Пост должен читаться как история дня или личный опыт обучения.
+Можно иногда добавлять лёгкие эмоции и эмодзи.
 """
             },
             {
@@ -93,39 +104,60 @@ async def generate_text_with_yandex_gpt(prompt: str) -> str:
     }
 
     async with aiohttp.ClientSession() as session:
+
         async with session.post(url, headers=headers, json=data) as response:
 
             if response.status == 200:
+
                 result = await response.json()
+
                 return result["result"]["alternatives"][0]["message"]["text"]
 
             else:
+
                 error_text = await response.text()
+
                 print(f"Ошибка API Yandex GPT: {response.status} — {error_text}")
-                return f"Ошибка генерации: {response.status}"
+
+                return "Ошибка генерации текста"
 
 
 async def publish_daily_post():
 
-    day_index = datetime.datetime.now().weekday()
-    prompt = PUBLICATION_PLAN[day_index]
-
     print(f"[{datetime.datetime.now()}] Генерирую пост...")
+
+    day_index = datetime.datetime.now().weekday()
+
+    # Если рабочий день
+    if is_work_day():
+
+        prompt = (
+            "Напиши пост для Telegram канала 'Даниил с завода'. "
+            "Сегодня была 12-часовая смена на заводе. "
+            "Автор устал, но всё равно вечером сел немного изучать Python или AI. "
+            "Расскажи небольшую историю обучения после работы. "
+            "Стиль личного дневника. 80-120 слов."
+        )
+
+    else:
+
+        prompt = PUBLICATION_PLAN[day_index]
 
     content = await generate_text_with_yandex_gpt(prompt)
 
     content = clean_markdown(content)
 
-    # удаляем лишние контакты если модель вдруг добавит
+    # удаляем контакты если модель их добавит
     content = re.sub(r"(?i)(ваш контакт|контакт|связаться со мной|напишите мне)[:\s]*", "", content)
     content = re.sub(r"@\w+", "", content)
 
     # считаем номер дня
     day_number = (datetime.datetime.now() - START_DATE).days + 1
 
-    content = f"День {day_number}. Путь из завода в IT\n\n" + content
+    content = f"День {day_number}. Путь из завода в IT\n\n{content}"
 
     content = content.strip()
+
     content += "\n\n📩 @Aslyamov74"
 
     try:
@@ -185,4 +217,5 @@ async def main():
 
 
 if __name__ == '__main__':
+
     asyncio.run(main())
