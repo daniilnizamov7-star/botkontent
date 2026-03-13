@@ -1,5 +1,5 @@
 aiogram
 apscheduler
 python-dotenv
-playwright
 aiohttp
+Pillow
