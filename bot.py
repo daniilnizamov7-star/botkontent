@@ -235,7 +235,7 @@ async def main():
     scheduler.add_job(
         publish_daily_post,
         'cron',
-        hour=16,
+        hour=4,
         minute=0,
         timezone='UTC'
     )
