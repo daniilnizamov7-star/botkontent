@@ -376,7 +376,7 @@ async def publish_daily_post():
             await bot.send_photo(
                 chat_id=os.getenv("CHANNEL_ID"),
                 photo=photo,
-                caption=content
+                caption=content[:1024]
             )
             # Удаляем файл картинки
             os.remove(image_path)
