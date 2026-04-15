@@ -17,7 +17,7 @@ bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher()
 router = Router()
 
-START_DATE = datetime.datetime(2026, 3, 5)
+START_DATE = datetime.datetime(2026, 4, 14)
 HISTORY_FILE = "posted_topics.json"  # Файл для хранения истории
 
 # ===== ОГРОМНЫЙ ПУЛ ТЕМ (50+ вариантов) =====
