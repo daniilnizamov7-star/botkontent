@@ -6,7 +6,7 @@ import datetime
 import json
 import random
 from aiogram import Bot, Dispatcher, Router
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -403,6 +403,177 @@ async def generate_image(prompt):
                 return filename
             return None
 
+async def post_to_vk(text: str, image_path: str = None) -> bool:
+    """Публикует пост в группу ВКонтакте. Возвращает True если успешно."""
+    token = os.getenv("VK_ACCESS_TOKEN")
+    group_id = os.getenv("VK_GROUP_ID")
+    if not token or not group_id:
+        print("⚠️ VK не настроен — пропускаем")
+        return False
+
+    attachment = None
+
+    # Загружаем фото если есть
+    if image_path:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.vk.com/method/photos.getWallUploadServer",
+                    params={"group_id": group_id, "access_token": token, "v": "5.199"}
+                ) as r:
+                    upload_data = await r.json()
+                upload_url = upload_data["response"]["upload_url"]
+
+            async with aiohttp.ClientSession() as session:
+                with open(image_path, "rb") as f:
+                    form = aiohttp.FormData()
+                    form.add_field("photo", f, filename="photo.jpg", content_type="image/jpeg")
+                    async with session.post(upload_url, data=form) as r:
+                        uploaded = await r.json()
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.vk.com/method/photos.saveWallPhoto",
+                    params={
+                        "group_id": group_id,
+                        "photo": uploaded["photo"],
+                        "server": uploaded["server"],
+                        "hash": uploaded["hash"],
+                        "access_token": token,
+                        "v": "5.199"
+                    }
+                ) as r:
+                    saved = await r.json()
+            photo_obj = saved["response"][0]
+            attachment = f"photo{photo_obj['owner_id']}_{photo_obj['id']}"
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки фото в VK: {e} — постим без картинки")
+            attachment = None
+
+    params = {
+        "owner_id": f"-{group_id}",
+        "from_group": 1,
+        "message": text,
+        "access_token": token,
+        "v": "5.199"
+    }
+    if attachment:
+        params["attachments"] = attachment
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.vk.com/method/wall.post",
+                data=params
+            ) as r:
+                result = await r.json()
+        if "error" in result:
+            print(f"❌ VK API ошибка: {result['error']['error_msg']}")
+            return False
+        print(f"✅ VK: пост опубликован (post_id={result['response']['post_id']})")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка публикации в VK: {e}")
+        return False
+
+
+# ===== ОЧЕРЕДЬ НА МОДЕРАЦИЮ =====
+# pending_post = {"content": str, "image_path": str|None, "day_number": int, "category": str, "topic": str}
+pending_post = {}
+
+def make_moderation_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Опубликовать", callback_data="mod_approve"),
+            InlineKeyboardButton(text="🔄 Перегенерировать", callback_data="mod_regen"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Редактировать текст", callback_data="mod_edit"),
+            InlineKeyboardButton(text="🖼 Новая картинка", callback_data="mod_new_image"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Пропустить", callback_data="mod_skip"),
+        ]
+    ])
+
+async def send_for_moderation(category: str, topic: str, is_scheduled: bool = False):
+    """Генерирует пост и отправляет на модерацию в личку владельцу."""
+    admin_id = os.getenv("ADMIN_CHAT_ID")
+    if not admin_id:
+        print("⚠️ ADMIN_CHAT_ID не задан — модерация невозможна")
+        return
+
+    day_number = (datetime.datetime.now() - START_DATE).days + 1
+    content = await generate_text(category, topic)
+    content = clean_markdown(content)
+    content = f"День {day_number}. Путь с завода в IT\n\n{content}"
+    content += "\n\n📩 @Aslyamov74"
+
+    image_prompt = await generate_image_prompt(content)
+    image_path = await generate_image(image_prompt)
+
+    pending_post.clear()
+    pending_post.update({
+        "content": content,
+        "image_path": image_path,
+        "day_number": day_number,
+        "category": category,
+        "topic": topic,
+        "is_scheduled": is_scheduled,
+    })
+
+    source_label = "⏰ Автопост по расписанию" if is_scheduled else "🔧 Ручной запуск"
+    caption = f"{source_label}\nКатегория: {category}\nТема: {topic}\n\n{content}"
+
+    try:
+        if image_path:
+            photo = FSInputFile(image_path)
+            await bot.send_photo(
+                chat_id=admin_id,
+                photo=photo,
+                caption=caption[:1024],
+                reply_markup=make_moderation_keyboard()
+            )
+        else:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=caption,
+                reply_markup=make_moderation_keyboard()
+            )
+        print(f"📬 Пост отправлен на модерацию [{category}]: {topic}")
+    except Exception as e:
+        print(f"❌ Ошибка отправки на модерацию: {e}")
+
+async def do_publish():
+    """Публикует pending_post в канал и ВК."""
+    content = pending_post.get("content", "")
+    image_path = pending_post.get("image_path")
+    day_number = pending_post.get("day_number", 0)
+
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    try:
+        if image_path and os.path.exists(image_path):
+            photo = FSInputFile(image_path)
+            await bot.send_photo(
+                chat_id=os.getenv("CHANNEL_ID"),
+                photo=photo,
+                caption=content[:1024]
+            )
+            await post_to_vk(content, image_path)
+            os.remove(image_path)
+        else:
+            await bot.send_message(chat_id=os.getenv("CHANNEL_ID"), text=content)
+            await post_to_vk(content)
+
+        posted_history["last_post_date"] = today_str
+        save_history()
+        print(f"✅ Опубликовано (День {day_number})")
+        pending_post.clear()
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка публикации: {e}")
+        return False
+
 async def publish_daily_post():
     if not is_post_day():
         print("📅 Сегодня не день публикации")
@@ -414,36 +585,8 @@ async def publish_daily_post():
         return
 
     category, topic = get_unique_topic()
-    print(f"📝 Генерирую пост: [{category}] {topic}")
-
-    content = await generate_text(category, topic)
-    content = clean_markdown(content)
-
-    day_number = (datetime.datetime.now() - START_DATE).days + 1
-    content = f"День {day_number}. Путь с завода в IT\n\n{content}"
-    content += "\n\n📩 @Aslyamov74"
-
-    image_prompt = await generate_image_prompt(content)
-    image_path = await generate_image(image_prompt)
-
-    try:
-        if image_path:
-            photo = FSInputFile(image_path)
-            await bot.send_photo(
-                chat_id=os.getenv("CHANNEL_ID"),
-                photo=photo,
-                caption=content[:1024]
-            )
-            os.remove(image_path)
-        else:
-            await bot.send_message(chat_id=os.getenv("CHANNEL_ID"), text=content)
-
-        posted_history["last_post_date"] = today_str
-        save_history()
-        print(f"✅ Пост опубликован (День {day_number}, всего: {posted_history['total_posts']})")
-
-    except Exception as e:
-        print(f"❌ Ошибка публикации: {e}")
+    print(f"📝 Генерирую пост на модерацию: [{category}] {topic}")
+    await send_for_moderation(category, topic, is_scheduled=True)
 
 # ===== КОМАНДЫ =====
 
@@ -463,29 +606,110 @@ async def test_post(message: Message):
 
 @router.message(Command("force_post"))
 async def force_post(message: Message):
-    """Принудительно опубликовать пост (игнорирует is_post_day и дату)"""
+    """Генерирует пост и отправляет на модерацию (игнорирует расписание)"""
     category, topic = get_unique_topic()
-    await message.answer(f"🔄 Генерирую: [{category}] {topic}")
-    content = await generate_text(category, topic)
-    content = clean_markdown(content)
-    day_number = (datetime.datetime.now() - START_DATE).days + 1
-    content = f"День {day_number}. Путь с завода в IT\n\n{content}"
-    content += "\n\n📩 @Aslyamov74"
-    image_prompt = await generate_image_prompt(content)
-    image_path = await generate_image(image_prompt)
-    try:
-        if image_path:
-            photo = FSInputFile(image_path)
-            await bot.send_photo(chat_id=os.getenv("CHANNEL_ID"), photo=photo, caption=content[:1024])
-            os.remove(image_path)
+    await message.answer(f"🔄 Генерирую на модерацию: [{category}] {topic}")
+    await send_for_moderation(category, topic, is_scheduled=False)
+    await message.answer("📬 Отправлено на модерацию — проверь личку бота!")
+
+# ===== ОБРАБОТЧИКИ МОДЕРАЦИИ =====
+
+@router.callback_query(lambda c: c.data and c.data.startswith("mod_"))
+async def handle_moderation(callback: CallbackQuery):
+    action = callback.data
+    admin_id = os.getenv("ADMIN_CHAT_ID")
+
+    # Защита: только владелец
+    if str(callback.from_user.id) != str(admin_id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    if not pending_post:
+        await callback.answer("Нет поста на модерации", show_alert=True)
+        return
+
+    if action == "mod_approve":
+        await callback.answer("Публикую...")
+        ok = await do_publish()
+        status = "✅ Опубликовано в канал и ВК!" if ok else "❌ Ошибка при публикации"
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(status)
+
+    elif action == "mod_regen":
+        await callback.answer("Перегенерирую...")
+        await callback.message.edit_reply_markup(reply_markup=None)
+        cat = pending_post.get("category")
+        topic = pending_post.get("topic")
+        # Удаляем старый файл если есть
+        old_img = pending_post.get("image_path")
+        if old_img and os.path.exists(old_img):
+            os.remove(old_img)
+        await callback.message.answer(f"🔄 Перегенерирую: [{cat}] {topic}")
+        await send_for_moderation(cat, topic, is_scheduled=pending_post.get("is_scheduled", False))
+
+    elif action == "mod_new_image":
+        await callback.answer("Генерирую новую картинку...")
+        old_img = pending_post.get("image_path")
+        if old_img and os.path.exists(old_img):
+            os.remove(old_img)
+        content = pending_post.get("content", "")
+        image_prompt = await generate_image_prompt(content)
+        new_image = await generate_image(image_prompt)
+        pending_post["image_path"] = new_image
+        await callback.message.edit_reply_markup(reply_markup=None)
+        cat = pending_post.get("category", "")
+        topic = pending_post.get("topic", "")
+        caption = f"🖼 Новая картинка\nКатегория: {cat}\nТема: {topic}\n\n{content}"
+        if new_image:
+            photo = FSInputFile(new_image)
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=caption[:1024],
+                reply_markup=make_moderation_keyboard()
+            )
         else:
-            await bot.send_message(chat_id=os.getenv("CHANNEL_ID"), text=content)
-        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        posted_history["last_post_date"] = today_str
-        save_history()
-        await message.answer("✅ Опубликовано!")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+            await callback.message.answer(caption, reply_markup=make_moderation_keyboard())
+
+    elif action == "mod_edit":
+        await callback.answer()
+        pending_post["awaiting_edit"] = True
+        await callback.message.answer(
+            "✏️ Отправь новый текст поста следующим сообщением.\n"
+            "(Без заголовка «День N» — он добавится автоматически)"
+        )
+
+    elif action == "mod_skip":
+        await callback.answer("Пропущено")
+        old_img = pending_post.get("image_path")
+        if old_img and os.path.exists(old_img):
+            os.remove(old_img)
+        pending_post.clear()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("❌ Пост пропущен. Тема уже списана из пула.")
+
+@router.message(lambda m: pending_post.get("awaiting_edit") and str(m.from_user.id) == str(os.getenv("ADMIN_CHAT_ID")))
+async def handle_edit_text(message: Message):
+    """Принимает отредактированный текст поста."""
+    day_number = pending_post.get("day_number", (datetime.datetime.now() - START_DATE).days + 1)
+    new_content = f"День {day_number}. Путь с завода в IT\n\n{message.text}"
+    new_content += "\n\n📩 @Aslyamov74"
+    pending_post["content"] = new_content
+    pending_post["awaiting_edit"] = False
+
+    image_path = pending_post.get("image_path")
+    cat = pending_post.get("category", "")
+    topic = pending_post.get("topic", "")
+    caption = f"✏️ Отредактировано\nКатегория: {cat}\nТема: {topic}\n\n{new_content}"
+
+    if image_path and os.path.exists(image_path):
+        photo = FSInputFile(image_path)
+        await message.answer_photo(
+            photo=photo,
+            caption=caption[:1024],
+            reply_markup=make_moderation_keyboard()
+        )
+    else:
+        await message.answer(caption, reply_markup=make_moderation_keyboard())
 
 @router.message(Command("preview"))
 async def preview_post(message: Message):
