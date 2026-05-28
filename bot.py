@@ -598,6 +598,15 @@ async def start(message: Message):
         f"Опубликовано постов: {posted_history['total_posts']}"
     )
 
+@router.message(Command("myid"))
+async def myid(message: Message):
+    admin_id = os.getenv("ADMIN_CHAT_ID", "не задан")
+    await message.answer(
+        f"Твой Telegram ID: {message.from_user.id}\n"
+        f"ADMIN_CHAT_ID в Railway: {admin_id}\n\n"
+        f"{'✅ Совпадают' if str(message.from_user.id) == str(admin_id) else '❌ НЕ совпадают — скопируй твой ID в Railway'}"
+    )
+
 @router.message(Command("test_post"))
 async def test_post(message: Message):
     await message.answer("🔄 Генерирую пост...")
