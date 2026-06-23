@@ -448,42 +448,63 @@ async def post_to_vk(text: str, image_path: str = None) -> bool:
 
     attachment = None
 
-    # Загружаем фото если есть
-    if image_path:
+    # Загружаем фото если есть — одна сессия, детальные логи каждого шага
+    if image_path and os.path.exists(image_path):
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+
+                # Шаг 1: получаем URL для загрузки
                 async with session.get(
                     "https://api.vk.com/method/photos.getWallUploadServer",
                     params={"group_id": group_id, "access_token": token, "v": "5.199"}
                 ) as r:
                     upload_data = await r.json()
-                upload_url = upload_data["response"]["upload_url"]
 
-            async with aiohttp.ClientSession() as session:
-                with open(image_path, "rb") as f:
-                    form = aiohttp.FormData()
-                    form.add_field("photo", f, filename="photo.jpg", content_type="image/jpeg")
-                    async with session.post(upload_url, data=form) as r:
-                        uploaded = await r.json()
+                if "error" in upload_data:
+                    print(f"❌ VK getWallUploadServer ошибка: {upload_data['error']['error_msg']} (код {upload_data['error']['error_code']})")
+                    print("⚠️ Публикуем в VK без картинки")
+                else:
+                    upload_url = upload_data["response"]["upload_url"]
+                    print(f"✅ VK шаг 1: получен upload_url")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    "https://api.vk.com/method/photos.saveWallPhoto",
-                    params={
-                        "group_id": group_id,
-                        "photo": uploaded["photo"],
-                        "server": uploaded["server"],
-                        "hash": uploaded["hash"],
-                        "access_token": token,
-                        "v": "5.199"
-                    }
-                ) as r:
-                    saved = await r.json()
-            photo_obj = saved["response"][0]
-            attachment = f"photo{photo_obj['owner_id']}_{photo_obj['id']}"
+                    # Шаг 2: загружаем файл
+                    with open(image_path, "rb") as f:
+                        form = aiohttp.FormData()
+                        form.add_field("photo", f, filename="photo.jpg", content_type="image/jpeg")
+                        async with session.post(upload_url, data=form) as r:
+                            uploaded = await r.json()
+
+                    if "photo" not in uploaded or uploaded.get("photo") == "[]":
+                        print(f"❌ VK шаг 2: файл не загружен. Ответ: {uploaded}")
+                    else:
+                        print(f"✅ VK шаг 2: файл загружен (server={uploaded.get('server')})")
+
+                        # Шаг 3: сохраняем фото
+                        async with session.get(
+                            "https://api.vk.com/method/photos.saveWallPhoto",
+                            params={
+                                "group_id": group_id,
+                                "photo": uploaded["photo"],
+                                "server": uploaded["server"],
+                                "hash": uploaded["hash"],
+                                "access_token": token,
+                                "v": "5.199"
+                            }
+                        ) as r:
+                            saved = await r.json()
+
+                        if "error" in saved:
+                            print(f"❌ VK шаг 3 saveWallPhoto ошибка: {saved['error']['error_msg']}")
+                        else:
+                            photo_obj = saved["response"][0]
+                            attachment = f"photo{photo_obj['owner_id']}_{photo_obj['id']}"
+                            print(f"✅ VK шаг 3: фото сохранено ({attachment})")
+
         except Exception as e:
-            print(f"⚠️ Ошибка загрузки фото в VK: {e} — постим без картинки")
+            print(f"⚠️ Исключение при загрузке фото в VK: {e} — постим без картинки")
             attachment = None
+    elif image_path:
+        print(f"⚠️ VK: файл картинки не найден на диске: {image_path}")
 
     params = {
         "owner_id": f"-{group_id}",
